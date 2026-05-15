@@ -44,8 +44,16 @@ runtime, mounted disc) and hands control off to the recompiled entry point.
 | Shared-globals fix (launcher and recompiled code on the same `Memory`) | done — was AVing on first MEM_WRITE32 |
 | `__init_hardware` runs (PI / AI / EXI / SI / DI register writes observed) | done |
 | Recompiled code reaches `__OSReadROM` (EXI Ch0 Dev 1 DMA into 0x001FB6C0) | done — DMA TSTART auto-clears via gcrecomp HW HLE |
-| **Game enters pure-register loop after EXI SRAM read** | blocker — heartbeat in `gcrecomp::Memory::translate` confirms zero mem ops over 8s |
-| SDK GX/VI HLE wired by address | pending — needs symbol detection (no decomp project for Ikaruga) |
+| `Memory::translate` heartbeat + read16 spin-detector (upstream) | done |
+| `--trace` codegen flag in `gcrecomp_recompiler` + lock-free TraceRing | done |
+| Launcher watchdog: every 3s, dumps function-entry histogram + live `g_ctx` snapshot | done |
+| `DCFlushRange` shared-globals AV (shared globals fix) | done |
+| DSP RES bit auto-clear (`hw_write16_hle`) | done |
+| DSP mailbox bit-15 auto-clear on write to `0xCC005004` | done |
+| ARAM DMA "complete" auto-set ARINT on `AR_DMA_CNT` write (both 16- and 32-bit) | done |
+| `trace_enter` moved out-of-line to defeat MSVC inlining elision | done |
+| **Intra-function loop on `0xCC005004` post-ARINT** | blocker — only visible via spin-detector, not the trace ring |
+| SDK GX/VI HLE wired by address | pending |
 | First frame rendered | pending |
 | Title screen reached | pending |
 
@@ -169,19 +177,22 @@ the toolkit. Working list (lives here so the next session can pick it up):
   the difference.
 
 ### Up next (concrete blocker)
-- [ ] **Why is Ikaruga in a pure-register loop after `__OSReadROM`?**
-  After the EXI Ch0 Device 1 DMA completes (TSTART auto-clears, DMA target
-  = 0x001FB6C0), the recompiled code makes zero memory accesses for 8+
-  seconds. Possibilities: (a) the synthetic SRAM contents (all zeros)
-  cause an SDK config-validation function to loop on internal-register
-  state; (b) the recompiler emitted a CFG-internal unconditional loop;
-  (c) the CRT init walks an uninitialised ctor table that resolves to
-  callable-but-no-op stubs and never terminates.
+- [ ] **Single-address read16 loop on `0xCC005004`**, hot at ~16M ops/sec.
+  Survives all DSPCR auto-clear, mailbox auto-clear, and ARINT-on-DMA-write
+  HLE. Trace ring shows last function entered = `func_800A766C` (OSGetTick,
+  one mftb instruction) and no further function entries — so the loop is
+  intra-function and uses a callee-saved register that `OSGetTick` didn't
+  clobber. The CPU snapshot (r3=0x8AC, r4=0xCC000000, lr=0x800A23B4) places
+  us inside `func_800A2484` (DSP init), just past the OSGetTick delay loop,
+  in what looks like a second mailbox-poll path. Need basic-block-level
+  tracing or a PC tracker to pinpoint.
 
 ### Toolkit pieces this needs
-- [ ] **Per-function call tracing** in `gcrecomp_recompiler` — option to
-  emit `TRACE_ENTER(0xADDR)` at the top of every generated function so
-  the boot-path can be reconstructed from a log instead of from a debugger.
+- [ ] **Basic-block trace** in `gcrecomp_recompiler` — `--trace-bb` flag
+  emitting a basic-block ID at every block label so we can see which BB
+  in which function is looping, not just which function got entered last.
+  Function-entry tracing is blind to intra-function loops, which is now
+  our concrete need on Ikaruga.
 - [ ] **SDK function detection by HW register signature** — scan recompiled
   functions for clusters of writes to CP (0xCC000000–0xCC0001FF), PE
   (0xCC001000–0xCC0011FF), VI (0xCC002000–0xCC002080) to identify

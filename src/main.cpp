@@ -13,9 +13,12 @@
 #include "ikaruga/gx/gx.h"
 #include "ikaruga/audio/audio.h"
 #include "ikaruga/input/input.h"
+#include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <thread>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -153,7 +156,8 @@ int main(int argc, char* argv[]) {
     input::input_init();
 
 #ifdef IK_HAS_RECOMPILED
-    // ---- Catch silent SEH crashes (access violations from recompiled code) ----
+    // ---- Catch silent SEH crashes; dump the trace ring so we can see
+    //      which recompiled function we were inside when it AV'd. ----
 #ifdef _WIN32
     SetUnhandledExceptionFilter([](EXCEPTION_POINTERS* ep) -> LONG {
         auto* r = ep->ExceptionRecord;
@@ -163,9 +167,46 @@ int main(int argc, char* argv[]) {
                 (unsigned long long)(r->NumberParameters > 0 ? r->ExceptionInformation[0] : 0),
                 (unsigned long long)(r->NumberParameters > 1 ? r->ExceptionInformation[1] : 0));
         fflush(stderr);
+        gcrecomp::trace_dump_recent(40);
         return EXCEPTION_CONTINUE_SEARCH;
     });
 #endif
+
+    // ---- Watchdog: every 3s, dump a histogram of the most-called
+    //      recompiled functions in the last ~4k entries. This is how
+    //      we identify the loop we're stuck in. ----
+    std::atomic<bool> watchdog_stop{false};
+    std::thread watchdog([&watchdog_stop]() {
+        using namespace std::chrono;
+        auto last_pos = gcrecomp::g_trace_ring.pos.load();
+        while (!watchdog_stop.load()) {
+            std::this_thread::sleep_for(seconds(3));
+            if (watchdog_stop.load()) break;
+            auto pos = gcrecomp::g_trace_ring.pos.load();
+            uint64_t delta = pos - last_pos;
+            last_pos = pos;
+            printf("\n[Watchdog] +%llu function entries since last tick (total %llu)\n",
+                   (unsigned long long)delta, (unsigned long long)pos);
+            if (pos > 0) {
+                uint32_t last_func = gcrecomp::g_trace_ring.entries[(pos - 1) & (gcrecomp::TraceRing::SIZE - 1)];
+                printf("[Watchdog] last function entered: func_%08X\n", last_func);
+            }
+            if (delta == 0) {
+                gcrecomp::trace_dump_recent(8);
+                // Live CPU state — note these reads race with the main thread,
+                // but for diagnosing a stuck loop we just need an approximate
+                // snapshot.
+                auto& c = gcrecomp::g_ctx;
+                printf("[Watchdog] cpu state (racy): r0=0x%08X r3=0x%08X r4=0x%08X "
+                       "r5=0x%08X r6=0x%08X ctr=0x%08X lr=0x%08X\n",
+                       c.r[0], c.r[3], c.r[4], c.r[5], c.r[6], c.ctr, c.lr);
+            } else {
+                gcrecomp::trace_dump_summary();
+            }
+        }
+    });
+
+    gcrecomp::trace_set_enabled(true);
 
     // ---- Jump into the recompiled DOL ----
     printf("\n[Game] Launching Ikaruga at 0x%08X...\n\n", DOL_ENTRY_POINT);
@@ -180,6 +221,9 @@ int main(int argc, char* argv[]) {
         fprintf(stderr, "[FATAL] Entry point 0x%08X not in function table.\n",
                 DOL_ENTRY_POINT);
     }
+
+    watchdog_stop.store(true);
+    watchdog.join();
 #else
     printf("\n[Game] Build IK_HAS_RECOMPILED to launch the recompiled game.\n");
     printf("[Game] Scaffolding is alive; press any key to exit.\n");
