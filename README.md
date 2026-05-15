@@ -41,7 +41,11 @@ runtime, mounted disc) and hands control off to the recompiled entry point.
 | Runtime brings up D3D11 / XAudio2 / Input / disc mount | done |
 | Function table populated; entry point `0x80003140` resolves | done |
 | **Hands control into recompiled `__eabi`** | done — control transferred |
-| SDK HLE wired (GX, VI, DVD, PAD, AI/DSP) | **next** — currently traps on first HW reg access |
+| Shared-globals fix (launcher and recompiled code on the same `Memory`) | done — was AVing on first MEM_WRITE32 |
+| `__init_hardware` runs (PI / AI / EXI / SI / DI register writes observed) | done |
+| Recompiled code reaches `__OSReadROM` (EXI Ch0 Dev 1 DMA into 0x001FB6C0) | done — DMA TSTART auto-clears via gcrecomp HW HLE |
+| **Game enters pure-register loop after EXI SRAM read** | blocker — heartbeat in `gcrecomp::Memory::translate` confirms zero mem ops over 8s |
+| SDK GX/VI HLE wired by address | pending — needs symbol detection (no decomp project for Ikaruga) |
 | First frame rendered | pending |
 | Title screen reached | pending |
 
@@ -158,20 +162,39 @@ cmake --build build --config Release --target ik_launcher
 Every "currently failing" item on Ikaruga maps to a concrete improvement to
 the toolkit. Working list (lives here so the next session can pick it up):
 
-- [ ] **SDK HLE for GX boot path** — game traps on first `__GXInit` /
-  hardware register access. Needs a generic HLE binding for `__GXInitHardware`
-  and friends in `gcrecomp_gx`.
-- [ ] **Symbol map heuristics** — without a decomp project, we have no
-  function names. Investigate using BLR-terminated runs + prologue scan
-  (already partly done in `gcrecomp_recompiler`'s phase 1.6) to name CRT
-  init, libc, GX, VI, DVD entry points by signature matching.
+### Already landed in gcrecomp
+- [x] **Memory-op heartbeat** in `Memory::translate` — without it the
+  silent post-init-hardware register loop looked identical to "running
+  fine but quiet." Now there's a `[HB]` print every 16M mem ops to tell
+  the difference.
+
+### Up next (concrete blocker)
+- [ ] **Why is Ikaruga in a pure-register loop after `__OSReadROM`?**
+  After the EXI Ch0 Device 1 DMA completes (TSTART auto-clears, DMA target
+  = 0x001FB6C0), the recompiled code makes zero memory accesses for 8+
+  seconds. Possibilities: (a) the synthetic SRAM contents (all zeros)
+  cause an SDK config-validation function to loop on internal-register
+  state; (b) the recompiler emitted a CFG-internal unconditional loop;
+  (c) the CRT init walks an uninitialised ctor table that resolves to
+  callable-but-no-op stubs and never terminates.
+
+### Toolkit pieces this needs
+- [ ] **Per-function call tracing** in `gcrecomp_recompiler` — option to
+  emit `TRACE_ENTER(0xADDR)` at the top of every generated function so
+  the boot-path can be reconstructed from a log instead of from a debugger.
+- [ ] **SDK function detection by HW register signature** — scan recompiled
+  functions for clusters of writes to CP (0xCC000000–0xCC0001FF), PE
+  (0xCC001000–0xCC0011FF), VI (0xCC002000–0xCC002080) to identify
+  `__GXInitHardware`, `__GXSetGPMetric`, `VIInit`, etc. by their access
+  pattern, then register HLE no-op stubs by address.
+- [ ] **Synthetic SRAM image** in `Memory::hw_regs` EXI HLE — return a
+  valid 64-byte GC SRAM blob (correct checksum, NTSC/EFB, English) on
+  EXI Ch0 Dev 1 reads, instead of all zeros from `calloc`.
 - [ ] **Paired-Singles correctness pass** — 5,283 PS instructions; verify
   ps_madds0 / ps_madds1 / ps_sum0 / ps_sum1 code-gen matches the GC's
   `psq_l/psq_st` quantization registers, since Ikaruga leans on these.
 - [ ] **DVD HLE FST integration** — game assets live on disc; needs
   `DVDOpen` / `DVDReadPrio` routed to the mounted ISO's FST.
-- [ ] **VI present cadence** — without a symbol map, `VIWaitForRetrace` is
-  not yet trapped; figure out the address by pattern-matching.
 
 ## Standing on the Shoulders of Giants
 
