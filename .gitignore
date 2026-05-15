@@ -1,0 +1,30 @@
+# Build output
+build/
+out/
+
+# IDE
+.vs/
+.vscode/
+*.suo
+*.user
+*.sln
+*.vcxproj*
+CMakeSettings.json
+.idea/
+
+# Game data (user-provided)
+*.iso
+*.dol
+*.gcm
+
+# Generated recompiled code
+recompiled/*.cpp
+recompiled/*.h
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Extracted assets
+assets/*
+!assets/.gitkeep
