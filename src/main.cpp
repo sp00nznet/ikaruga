@@ -153,6 +153,20 @@ int main(int argc, char* argv[]) {
     input::input_init();
 
 #ifdef IK_HAS_RECOMPILED
+    // ---- Catch silent SEH crashes (access violations from recompiled code) ----
+#ifdef _WIN32
+    SetUnhandledExceptionFilter([](EXCEPTION_POINTERS* ep) -> LONG {
+        auto* r = ep->ExceptionRecord;
+        fprintf(stderr,
+                "\n[CRASH] code=0x%08lX  at host RIP=0x%p  param0=0x%llX  param1=0x%llX\n",
+                r->ExceptionCode, r->ExceptionAddress,
+                (unsigned long long)(r->NumberParameters > 0 ? r->ExceptionInformation[0] : 0),
+                (unsigned long long)(r->NumberParameters > 1 ? r->ExceptionInformation[1] : 0));
+        fflush(stderr);
+        return EXCEPTION_CONTINUE_SEARCH;
+    });
+#endif
+
     // ---- Jump into the recompiled DOL ----
     printf("\n[Game] Launching Ikaruga at 0x%08X...\n\n", DOL_ENTRY_POINT);
     fflush(stdout);

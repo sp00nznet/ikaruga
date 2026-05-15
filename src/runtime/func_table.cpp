@@ -11,7 +11,7 @@
 
 namespace ikaruga {
 
-FuncTable g_func_table;
+// g_func_table is aliased from gcrecomp::g_func_table in runtime.h.
 
 bool runtime_init() {
     printf("[Runtime] Initializing Ikaruga runtime...\n");

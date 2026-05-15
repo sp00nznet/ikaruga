@@ -18,10 +18,15 @@ using FuncTable     = gcrecomp::FuncTable;
 using RecompiledFunc = gcrecomp::RecompiledFunc;
 using GameConfig    = gcrecomp::GameConfig;
 
-// ---- Global runtime state (Ikaruga instance) ----------------------
-extern PPCContext g_ctx;
-extern Memory     g_mem;
-extern FuncTable  g_func_table;
+// ---- Global runtime state ------------------------------------------
+// Alias the shared gcrecomp globals. The recompiled code (recomp_common.h)
+// emits references to gcrecomp::g_mem / gcrecomp::g_func_table directly, so
+// the launcher and the recompiled code MUST share the same Memory /
+// FuncTable instance. Defining a separate ikaruga::g_mem here would create
+// a second uninitialized Memory and crash on the first MEM_WRITE32.
+using gcrecomp::g_ctx;
+using gcrecomp::g_mem;
+using gcrecomp::g_func_table;
 
 bool runtime_init();
 void runtime_shutdown();
