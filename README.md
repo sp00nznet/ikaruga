@@ -52,7 +52,12 @@ runtime, mounted disc) and hands control off to the recompiled entry point.
 | DSP mailbox bit-15 auto-clear on write to `0xCC005004` | done |
 | ARAM DMA "complete" auto-set ARINT on `AR_DMA_CNT` write (both 16- and 32-bit) | done |
 | `trace_enter` moved out-of-line to defeat MSVC inlining elision | done |
-| **Intra-function loop on `0xCC005004` post-ARINT** | blocker — only visible via spin-detector, not the trace ring |
+| Recompiler emits symbol-map names (`fn_XXXX`, `OSWhatever`) at bl sites — fixed thousands of forward-decl/call-site mismatches | done (gcrecomp `5e07415`) |
+| Recompiler `--namespace` flag wraps generated code to avoid stdlib name collisions (`main`, `memset`, etc.) | done (gcrecomp `5e07415`) |
+| bl to non-CFG targets now routes through `CALL_INDIRECT` instead of dangling `func_XXXX` refs | done (gcrecomp `5e07415`) |
+| Periodic-interrupt scheduler (`g_interrupts.tick`) called from `Memory::translate` every 256K ops | done (gcrecomp `5e07415`) |
+| Alternating bit-15 read pattern on `0xCC005004` so DSP mailbox poll exits both ways | done (gcrecomp `5e07415`) |
+| **Intra-function loop on `0xCC005004` post-ARINT** | unblocked by mailbox alternating pattern; needs re-test against latest gcrecomp |
 | SDK GX/VI HLE wired by address | pending |
 | First frame rendered | pending |
 | Title screen reached | pending |
@@ -177,15 +182,13 @@ the toolkit. Working list (lives here so the next session can pick it up):
   the difference.
 
 ### Up next (concrete blocker)
-- [ ] **Single-address read16 loop on `0xCC005004`**, hot at ~16M ops/sec.
-  Survives all DSPCR auto-clear, mailbox auto-clear, and ARINT-on-DMA-write
-  HLE. Trace ring shows last function entered = `func_800A766C` (OSGetTick,
-  one mftb instruction) and no further function entries — so the loop is
-  intra-function and uses a callee-saved register that `OSGetTick` didn't
-  clobber. The CPU snapshot (r3=0x8AC, r4=0xCC000000, lr=0x800A23B4) places
-  us inside `func_800A2484` (DSP init), just past the OSGetTick delay loop,
-  in what looks like a second mailbox-poll path. Need basic-block-level
-  tracing or a PC tracker to pinpoint.
+- [ ] **Re-test after gcrecomp `5e07415`** — that commit added the
+  alternating-bit-15 pattern for `0xCC005004` reads + periodic interrupts +
+  symbol-map call names + `--namespace` codegen. The intra-function poll
+  loop documented previously *should* be unblocked by the alternating
+  mailbox HLE. Needs: rebuild recompiler, regenerate Ikaruga with
+  `--namespace ikaruga_game --trace`, full rebuild, run, watch where the
+  trace ring stops growing now.
 
 ### Toolkit pieces this needs
 - [ ] **Basic-block trace** in `gcrecomp_recompiler` — `--trace-bb` flag
